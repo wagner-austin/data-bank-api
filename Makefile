@@ -24,6 +24,6 @@ guards:
 	python .\scripts\guard.py
 
 test:
-	if (Test-Path ".\pyproject.toml") { Write-Host "[test] pytest with coverage (branches)" -ForegroundColor Cyan; poetry run pytest --cov=data_bank_api --cov-branch --cov-report=term-missing -v; } else { Write-Host "[test] Skipped: pyproject missing" -ForegroundColor Yellow; }
+	if (Test-Path ".\pyproject.toml") { Write-Host "[test] pytest with coverage (branches)" -ForegroundColor Cyan; poetry run pytest --cov=data_bank_api --cov=scripts --cov-branch --cov-report=term-missing -v; } else { Write-Host "[test] Skipped: pyproject missing" -ForegroundColor Yellow; }
 
 check: lint test
