@@ -13,10 +13,12 @@ def test_settings_from_env_reads_values(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("DATA_ROOT", "/x")
     monkeypatch.setenv("MIN_FREE_GB", "7")
     monkeypatch.setenv("DELETE_STRICT_404", "true")
+    monkeypatch.setenv("MAX_FILE_BYTES", "1234")
     s = Settings.from_env()
     assert s.data_root == "/x"
     assert s.min_free_gb == 7
     assert s.delete_strict_404 is True
+    assert s.max_file_bytes == 1234
 
 
 def test_json_logging_includes_exc_info(capfd: CaptureFixture[str]) -> None:
