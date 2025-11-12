@@ -44,17 +44,7 @@ USER app
 
 EXPOSE 8000
 
-# Basic container healthcheck against /readyz without adding curl
-HEALTHCHECK --interval=30s --timeout=3s --retries=3 CMD python - << 'PY' || exit 1
-import sys
-try:
-    import httpx
-    r = httpx.get('http://127.0.0.1:8000/readyz', timeout=2.0)
-    sys.exit(0 if r.status_code == 200 else 1)
-except Exception:
-    sys.exit(1)
-PY
-
 # Railway sets $PORT dynamically; fallback to 8000 for local testing
+# Note: Railway handles health checks via railway.toml healthcheckPath="/healthz"
 ENV WEB_CONCURRENCY=1
 CMD ["sh", "-c", "exec uvicorn data_bank_api.app:create_app --factory --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-1}"]
