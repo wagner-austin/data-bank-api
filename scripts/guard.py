@@ -2,10 +2,8 @@
 from __future__ import annotations
 
 import re
-import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -15,7 +13,7 @@ TARGET_DIRS = [
 ]
 
 EXCLUDE_DIRNAMES = {".venv", "__pycache__", "node_modules"}
-ALLOW_EXT = {".py", ".pyi"}
+ALLOW_EXT = {".py"}
 
 PATTERNS: dict[str, re.Pattern[str]] = {
     "typing.Any": re.compile(r"\btyping\.Any\b"),
@@ -40,6 +38,10 @@ def iter_files(paths: Iterable[Path]) -> Iterable[Path]:
         for p in base.rglob("*"):
             if not p.is_file():
                 continue
+            # Disallow .pyi stubs entirely
+            if p.suffix == ".pyi":
+                yield p
+                continue
             if p.suffix not in ALLOW_EXT:
                 continue
             if any(part in EXCLUDE_DIRNAMES for part in p.parts):
@@ -49,10 +51,14 @@ def iter_files(paths: Iterable[Path]) -> Iterable[Path]:
 
 def scan_file(path: Path) -> list[str]:
     errors: list[str] = []
+    # Disallow .pyi files existing at all
+    if path.suffix == ".pyi":
+        return [f"{path}: disallowed file: .pyi stubs are not permitted"]
+
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
-    except Exception as e:  # pragma: no cover
-        return [f"{path}: failed to read: {e}"]
+    except (OSError, UnicodeDecodeError) as e:  # pragma: no cover
+        raise RuntimeError(f"failed to read {path}: {e}") from e
 
     allow_print = "tests" in path.parts
     lines = text.splitlines()
@@ -87,4 +93,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
