@@ -7,7 +7,10 @@ name = "data-bank-api"
 version = "0.1.0"
 description = "Strictly-typed file storage API for service-to-service corpora exchange on Railway"
 authors = ["Your Team <team@example.com>"]
-packages = [{ include = "data_bank_api", from = "src" }]
+packages = [
+  { include = "data_bank_api", from = "src" },
+  { include = "scripts" }
+]
 readme = "README.md"
 
 [tool.poetry.dependencies]
