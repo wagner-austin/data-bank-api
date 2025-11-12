@@ -64,7 +64,7 @@ CI/CD: Railway auto-deploy from git
 ### Layout
 - Hierarchical paths to avoid hot directories:
   - `/data/files/ab/cd/abcdef0123456789.bin`
-  - `file_id`: hex digest (e.g., sha256) or server-generated UUIDv4 rendered as lowercase hex; length-limited, hex-only.
+  - `file_id`: server-generated sha256 hex digest of the uploaded content (lowercase). This serves as both the content address (dedupe-friendly) and the HTTP `ETag`.
 
 ### Atomic Writes
 - Stream to a temp file (e.g., `.tmp`), fsync, and atomic rename to final path.
@@ -78,6 +78,7 @@ CI/CD: Railway auto-deploy from git
 
 ### Metadata
 - Persist `size_bytes`, `content_type`, `sha256`, and `created_at`. Use `sha256` as `ETag` for HTTP caching semantics.
+- Implementation detail: metadata is written as a best‑effort sidecar file alongside the blob (e.g., `/data/files/ab/cd/<file_id>.meta`). HEAD/INFO read from sidecar when available and fall back to recomputing `sha256` from the blob if missing/invalid.
 
 ---
 
@@ -91,13 +92,13 @@ CI/CD: Railway auto-deploy from git
 ### Endpoints
 - `POST /files` (multipart/form-data)
   - Input: single part `file`.
-  - Stream to temp, compute sha256, fsync+rename. Capture metadata.
+  - The server ignores the multipart filename for identity. The file is streamed to a temp file, `sha256` is computed while streaming, then the blob is fsync+renamed atomically to the final path derived from the `file_id` (sha256). Metadata is captured (best‑effort sidecar).
   - Returns: `201 { file_id, size, sha256, content_type, created_at }`.
-  - Errors: 400 (bad multipart), 401/403 (auth), 413 (too large), 415 (unsupported), 507 (insufficient storage), 500.
+  - Errors: 400 (bad multipart), 401/403 (auth), 413 (too large; code `PAYLOAD_TOO_LARGE`), 415 (unsupported), 507 (insufficient storage), 500.
 
 - `GET /files/{file_id}`
   - Streaming response; supports Range requests.
-  - Headers: `Accept-Ranges: bytes`, `Content-Length`, `Content-Type`, `ETag`, optional `Content-Disposition`.
+  - Headers: `Accept-Ranges: bytes`, `Content-Length`, `Content-Type`, `ETag`, optional `Content-Disposition`. `ETag` and `Content-Type` are returned for both full (200) and ranged (206) responses.
   - 206 for valid ranges, 416 for unsatisfiable ranges.
   - Errors: 404, 416, 401/403, 500.
 
@@ -192,16 +193,267 @@ CI/CD: Railway auto-deploy from git
 ## Integration Points
 
 ### turkic-api → data-bank-api (Upload)
-- After corpus assembly completes:
-  - `POST /files` with file payload and `X-API-Key`.
-  - Parse `file_id`; persist in turkic-api job record (Redis) for downstream use.
+
+**Purpose:** Upload assembled corpus files to data-bank-api after job completion.
+
+**Files to Modify:**
+
+1. **`api/config.py`** - Add data-bank-api credentials:
+   ```python
+   @dataclass(frozen=True)
+   class Settings:
+       redis_url: str
+       data_dir: str
+       environment: str
+       data_bank_api_url: str      # NEW
+       data_bank_api_key: str      # NEW
+
+       @staticmethod
+       def from_env() -> Settings:
+           prefix = "TURKIC_"
+           # ... existing fields ...
+           data_bank_api_url = os.getenv(f"{prefix}DATA_BANK_API_URL", "").strip()
+           data_bank_api_key = os.getenv(f"{prefix}DATA_BANK_API_KEY", "").strip()
+           return Settings(..., data_bank_api_url=data_bank_api_url, data_bank_api_key=data_bank_api_key)
+   ```
+
+2. **`api/jobs.py`** - Upload after job completion (after line 127):
+   ```python
+   # Job completed successfully - upload to data-bank-api
+   file_id: str | None = None
+   if settings.data_bank_api_url and settings.data_bank_api_key:
+       try:
+           import httpx
+           with out_path.open("rb") as f:
+               resp = httpx.post(
+                   f"{settings.data_bank_api_url}/files",
+                   headers={"X-API-Key": settings.data_bank_api_key},
+                   files={"file": (f"{job_id}.txt", f, "text/plain; charset=utf-8")},
+                   timeout=600.0,  # 10min for large files
+               )
+               resp.raise_for_status()
+               data = resp.json()
+               file_id = data["file_id"]
+               logger.info("Uploaded to data-bank-api", extra={"job_id": job_id, "file_id": file_id})
+       except Exception as exc:
+           logger.error("Failed to upload to data-bank-api", extra={"job_id": job_id, "error": str(exc)})
+           # Don't fail the job - file is still available locally
+
+   # Store file_id in Redis job hash
+   redis.hset(
+       f"job:{job_id}",
+       mapping={
+           "status": "completed",
+           "updated_at": datetime.utcnow().isoformat(),
+           "progress": "100",
+           "message": "done",
+           "file_id": file_id or "",  # NEW
+       },
+   )
+   ```
+
+3. **`api/models.py`** - Add `file_id` to response schema:
+   ```python
+   class JobStatus(BaseModel):
+       job_id: str
+       status: Literal["queued", "processing", "completed", "failed"]
+       progress: int
+       message: str | None = None
+       result_url: str | None = None
+       file_id: str | None = None  # NEW: data-bank-api file ID (when completed)
+       created_at: datetime
+       updated_at: datetime
+       error: str | None = None
+   ```
+
+4. **`pyproject.toml`** - Add httpx dependency:
+   ```toml
+   [tool.poetry.dependencies]
+   httpx = "^0.28.0"  # NEW: for data-bank-api uploads
+   ```
+
+**Environment Variables (Railway):**
+```bash
+TURKIC_DATA_BANK_API_URL="http://data-bank-api.railway.internal"
+TURKIC_DATA_BANK_API_KEY="dbapi_turkic_74469347850f4a9a2f431f358692899d392e21a37b75a6f8921bfdbdd37f289c"
+```
+
+**User Flow:**
+1. `POST /api/v1/jobs` → `{"job_id": "abc123"}`
+2. Poll `GET /api/v1/jobs/abc123` until `status == "completed"`
+3. Response includes `file_id: "xyz789"` (data-bank-api file ID)
+4. Pass `file_id` to model-trainer
+
+---
 
 ### model-trainer ← data-bank-api (Download)
-- Accept `file_id` in training request (preferred over raw URLs).
-- Worker flow:
-  - `HEAD /files/{file_id}`: check presence and `Content-Length`/`ETag`.
-  - `GET /files/{file_id}` streaming to temp file under `/data/corpus`, periodic progress events (MB), atomic rename, verify bytes (or ETag).
-  - Train from local path; schedule TTL cleanup of cached file when appropriate.
+
+**Purpose:** Download corpus files from data-bank-api before training.
+
+**Files to Modify:**
+
+1. **`server/model_trainer/core/config/settings.py`** - Add data-bank-api config:
+   ```python
+   class AppConfig(BaseSettings):
+       data_root: str = "/data"
+       artifacts_root: str = "/data/artifacts"
+       runs_root: str = "/data/runs"
+       logs_root: str = "/data/logs"
+       data_bank_api_url: str = ""      # NEW
+       data_bank_api_key: str = ""      # NEW
+       # ... existing fields ...
+   ```
+
+2. **`server/model_trainer/api/schemas/runs.py`** - Add `corpus_file_id` field:
+   ```python
+   class TrainRequest(BaseModel):
+       model_family: Annotated[Literal["gpt2", "llama", "qwen"], Field(default="gpt2")]
+       model_size: Annotated[str, Field(default="small")]
+       # ... existing fields ...
+       corpus_path: Annotated[str | None, Field(default=None, description="Filesystem path to corpus")]
+       corpus_file_id: Annotated[str | None, Field(default=None, description="data-bank-api file ID")]
+       tokenizer_id: Annotated[str, Field(description="Tokenizer artifact ID to use")]
+
+       @field_validator("corpus_path", "corpus_file_id")
+       @classmethod
+       def validate_corpus_source(cls, v: str | None, info: ValidationInfo) -> str | None:
+           # Ensure exactly one is provided
+           values = info.data
+           corpus_path = values.get("corpus_path")
+           corpus_file_id = values.get("corpus_file_id")
+           if not corpus_path and not corpus_file_id:
+               raise ValueError("Either corpus_path or corpus_file_id must be provided")
+           if corpus_path and corpus_file_id:
+               raise ValueError("Only one of corpus_path or corpus_file_id can be provided")
+           return v
+   ```
+
+3. **`server/model_trainer/core/services/data/corpus_fetcher.py`** - NEW service:
+   ```python
+   from pathlib import Path
+   import httpx
+   import hashlib
+
+   class CorpusFetcher:
+       def __init__(self, api_url: str, api_key: str, cache_dir: Path) -> None:
+           self._api_url = api_url
+           self._api_key = api_key
+           self._cache_dir = cache_dir
+           self._cache_dir.mkdir(parents=True, exist_ok=True)
+
+       def fetch(self, file_id: str) -> Path:
+           """Download corpus from data-bank-api, cache locally, return path."""
+           cache_path = self._cache_dir / f"{file_id}.txt"
+
+           # Return cached if exists and valid
+           if cache_path.exists():
+               return cache_path
+
+           # Download from data-bank-api
+           headers = {"X-API-Key": self._api_key}
+           url = f"{self._api_url}/files/{file_id}"
+
+           # HEAD to get size and ETag
+           head_resp = httpx.head(url, headers=headers, timeout=30.0)
+           head_resp.raise_for_status()
+           expected_size = int(head_resp.headers["content-length"])
+           etag = head_resp.headers.get("etag", "")
+
+           # Stream download with resume support
+           temp_path = cache_path.with_suffix(".tmp")
+           start_byte = temp_path.stat().st_size if temp_path.exists() else 0
+
+           if start_byte > 0:
+               headers["Range"] = f"bytes={start_byte}-"
+
+           with httpx.stream("GET", url, headers=headers, timeout=600.0) as resp:
+               resp.raise_for_status()
+               mode = "ab" if start_byte > 0 else "wb"
+               with temp_path.open(mode) as f:
+                   for chunk in resp.iter_bytes(chunk_size=1024 * 1024):  # 1MB chunks
+                       f.write(chunk)
+
+           # Verify size
+           if temp_path.stat().st_size != expected_size:
+               raise RuntimeError(f"Size mismatch: expected {expected_size}, got {temp_path.stat().st_size}")
+
+           # Atomic rename
+           temp_path.rename(cache_path)
+           return cache_path
+   ```
+
+4. **`server/model_trainer/orchestrators/training_orchestrator.py`** - Resolve corpus before enqueue:
+   ```python
+   def train(self, request: TrainRequest, req: Request) -> TrainResponse:
+       # ... existing run_id generation ...
+
+       # Resolve corpus path
+       if request.corpus_file_id:
+           # Download from data-bank-api
+           fetcher = CorpusFetcher(
+               api_url=self._settings.app.data_bank_api_url,
+               api_key=self._settings.app.data_bank_api_key,
+               cache_dir=Path(self._settings.app.data_root) / "corpus_cache",
+           )
+           corpus_path = str(fetcher.fetch(request.corpus_file_id))
+       else:
+           corpus_path = request.corpus_path  # Use provided filesystem path
+
+       # Build request payload with resolved path
+       request_payload: TrainRequestPayload = {
+           # ... existing fields ...
+           "corpus_path": corpus_path,
+       }
+       # ... rest of function ...
+   ```
+
+5. **`pyproject.toml`** - Ensure httpx is in dependencies (already present).
+
+**Environment Variables (Railway):**
+
+For **model-trainer-api** service:
+```bash
+DATA_BANK_API_URL="http://data-bank-api.railway.internal"
+DATA_BANK_API_KEY="dbapi_trainer_f6839ba5dad97cf67f12daf160458e9ebdb255a5df052466ca719d97e238e6e1"
+```
+
+For **model-trainer-worker** service:
+```bash
+DATA_BANK_API_URL="http://data-bank-api.railway.internal"
+DATA_BANK_API_KEY="dbapi_trainer_f6839ba5dad97cf67f12daf160458e9ebdb255a5df052466ca719d97e238e6e1"
+```
+
+**User Flow:**
+1. Get `file_id` from turkic-api (or upload directly to data-bank-api)
+2. `POST /runs/train` with `corpus_file_id: "xyz789"`
+3. model-trainer downloads corpus, caches at `/data/corpus_cache/xyz789.txt`
+4. Training proceeds with local cached file
+5. Cached file persists across jobs (no re-download needed)
+
+---
+
+### Error Handling
+
+**turkic-api Upload Failure:**
+- Log error but don't fail the job
+- Job status remains "completed"
+- `file_id` will be empty string or null
+- User can still download via `/api/v1/jobs/{job_id}/result` endpoint
+
+**model-trainer Download Failure:**
+- Return 400 Bad Request with error details
+- Log failure with run_id and file_id
+- Do not enqueue training job
+- Common errors:
+  - 401/403: Invalid API key
+  - 404: File not found in data-bank-api
+  - 507: data-bank-api out of space
+  - Network timeout: Retry with exponential backoff
+
+**Cache Management:**
+- model-trainer cache stored at `/data/corpus_cache/{file_id}.txt`
+- No automatic cleanup (manual pruning or TTL-based cleanup can be added later)
+- Resume support: partial downloads continue from last byte
 
 ---
 
@@ -239,3 +491,4 @@ CI/CD: Railway auto-deploy from git
 - Quotas: per-service byte caps and/or file count; enforcement strategy.
 - Delete: idempotent 204 vs strict 404 on missing.
 - Required content types vs accepting octet-stream by default.
+
