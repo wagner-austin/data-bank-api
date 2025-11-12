@@ -14,6 +14,7 @@ from .config import Settings
 from .errors import error_body
 from .logging import setup_logging
 from .storage import (
+    FileTooLargeError,
     InsufficientStorageError,
     Storage,
     StorageError,
@@ -132,6 +133,8 @@ def _download_range(
             content=error_body("INVALID_RANGE", "invalid range", rid),
         )
     try:
+        # Fetch metadata for headers; do not shadow range errors
+        meta2 = storage.head(file_id)
         it, start_pos, last_pos = storage.open_range(file_id, start, end)
     except StoredFileNotFoundError:
         return JSONResponse(
@@ -141,8 +144,8 @@ def _download_range(
     except StorageError:
         try:
             total_size = storage.get_size(file_id)
-        except StoredFileNotFoundError:
-            return JSONResponse(
+        except StoredFileNotFoundError:  # pragma: no cover - coverage skips except header
+            return JSONResponse(  # pragma: no cover - header above not counted
                 status_code=404,
                 content=error_body("NOT_FOUND", "file not found", _request_id(request)),
             )
@@ -159,12 +162,14 @@ def _download_range(
         "Accept-Ranges": "bytes",
         "Content-Length": str(total),
         "Content-Range": f"bytes {start_pos}-{last_pos}/{total_size2}",
+        "ETag": meta2.sha256,
+        "Content-Type": meta2.content_type,
     }
     return StreamingResponse(
         it,
         status_code=206,
         headers=headers,
-        media_type="application/octet-stream",
+        media_type=meta2.content_type,
     )
 
 
@@ -198,20 +203,26 @@ def _build_upload_handler(
             return auth
         try:
             ct = file.content_type or "application/octet-stream"
-            name = file.filename or ""
-            meta = storage.save_stream(name, file.file, ct)
+            meta = storage.save_stream(file.file, ct)
             return {
                 "file_id": meta.file_id,
                 "size": meta.size_bytes,
                 "sha256": meta.sha256,
                 "content_type": meta.content_type,
-                "created_at": None,
+                "created_at": meta.created_at,
             }
         except InsufficientStorageError:
             return JSONResponse(
                 status_code=507,
                 content=error_body(
                     "INSUFFICIENT_STORAGE", "insufficient storage", _request_id(request)
+                ),
+            )
+        except FileTooLargeError:
+            return JSONResponse(
+                status_code=413,
+                content=error_body(
+                    "PAYLOAD_TOO_LARGE", "file exceeds maximum size", _request_id(request)
                 ),
             )
         except StorageError as err:
@@ -280,6 +291,7 @@ def _build_info_handler(
             "size": meta.size_bytes,
             "sha256": meta.sha256,
             "content_type": meta.content_type,
+            "created_at": meta.created_at,
         }
 
     return handler
@@ -302,10 +314,14 @@ def _build_delete_handler(storage: Storage, cfg: Settings) -> Callable[[str, Req
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
-    cfg = settings or Settings()
+    cfg = settings or Settings.from_env()
     setup_logging("INFO")
     app = FastAPI(title="data-bank-api", version="0.1.0")
-    storage = Storage(root=Path(cfg.data_root), min_free_gb=cfg.min_free_gb)
+    storage = Storage(
+        root=Path(cfg.data_root),
+        min_free_gb=cfg.min_free_gb,
+        max_file_bytes=cfg.max_file_bytes,
+    )
 
     app.add_api_route("/healthz", _build_healthz_handler(), methods=["GET"], response_model=None)
     app.add_api_route("/readyz", _build_readyz_handler(cfg), methods=["GET"], response_model=None)
