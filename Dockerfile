@@ -18,6 +18,7 @@ WORKDIR /build
 
 COPY pyproject.toml poetry.lock README.md ./
 COPY src ./src
+COPY scripts ./scripts
 
 # Build wheel (prod deps only)
 RUN poetry build -f wheel
