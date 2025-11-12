@@ -67,12 +67,14 @@ def test_auth_enforced_upload_401_403_200(tmp_path: Path) -> None:
 def test_range_errors_and_headers(tmp_path: Path) -> None:
     client = _client(tmp_path)
     payload = b"hello world" * 3
-    fid = "abcd1234"
     r0 = client.post(
         "/files",
-        files={"file": (fid, io.BytesIO(payload), "application/octet-stream")},
+        files={"file": ("anyname.txt", io.BytesIO(payload), "application/octet-stream")},
     )
     assert r0.status_code in (200, 201)
+    body0: dict[str, object] = json.loads(r0.text)
+    fid = str(body0.get("file_id", ""))
+    assert fid != ""
 
     # invalid prefix
     r1 = client.get(f"/files/{fid}", headers={"Range": "bad=0-10"})
@@ -118,13 +120,20 @@ def test_upload_507_from_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert r.status_code == 507
 
 
-def test_upload_bad_request_on_invalid_file_id(tmp_path: Path) -> None:
-    client = _client(tmp_path)
+def test_upload_413_payload_too_large(tmp_path: Path) -> None:
+    # Configure max size to 1 byte and upload 2 bytes to trigger 413
+    s = Settings(
+        data_root=str(tmp_path / "files"),
+        min_free_gb=0,
+        delete_strict_404=False,
+        max_file_bytes=1,
+    )
+    client = _client(tmp_path, s)
     resp = client.post(
         "/files",
-        files={"file": ("zz", io.BytesIO(b"data"), "text/plain")},
+        files={"file": ("x.txt", io.BytesIO(b"dd"), "text/plain")},
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 413
 
 
 def test_delete_strict_404(tmp_path: Path) -> None:
