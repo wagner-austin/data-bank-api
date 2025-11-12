@@ -108,7 +108,8 @@ CI/CD: Railway auto-deploy from git
   - JSON metadata: `{ file_id, size, sha256, content_type, created_at }`.
 
 - `DELETE /files/{file_id}`
-  - 204 on success. Idempotency: either 204 for missing or strict 404 (configurable).
+  - 204 on success. Default: idempotent (returns 204 even if missing).
+  - Config: `DELETE_STRICT_404=true` switches to strict 404 on missing.
 
 - `GET /healthz`
   - 200 when process is up.
@@ -121,7 +122,9 @@ CI/CD: Railway auto-deploy from git
   - Single-range bytes (e.g., `bytes=0-`, `bytes=100-199`), with correct `Content-Range` and `Content-Length`.
   - 416 on invalid ranges with `Content-Range: bytes */<size>`.
 - ETag is `sha256`; future: support `If-None-Match` for caching.
-- Consistent JSON error payloads with `code`, `message`, and `request_id`.
+- Error payloads are consistent JSON with fields:
+  - `code` (string, machine-readable), `message` (string), `request_id` (string).
+  - Example: `{ "code": "NOT_FOUND", "message": "file not found", "request_id": "req-123" }`.
 
 ---
 
@@ -129,6 +132,13 @@ CI/CD: Railway auto-deploy from git
 - Strict `file_id` validation (hex-only, length bound). No user-controlled path assembly.
 - API keys per client; scope enforcement; per-key rate limiting.
 - Private network only, plus key checks (defense in depth).
+
+### API Key Scopes
+- Keys carry minimal scopes:
+  - `files:write` for `POST /files`.
+  - `files:read` for `HEAD/GET /files/{id}`, `/info`.
+  - `files:delete` for `DELETE /files/{id}`.
+  - Reject requests lacking required scope with 403.
 
 ---
 
@@ -141,6 +151,9 @@ CI/CD: Railway auto-deploy from git
 - Metadata/HEAD parity and consistent ETag.
 - Delete semantics (idempotent vs strict 404 path).
 - Auth and rate-limiting.
+
+### Request Correlation
+- Accept `X-Request-ID` from callers; generate UUIDv4 if absent. Echo on all responses and include in logs.
 
 ### Integration
 - Upload → HEAD → download round-trip; large-file streaming via temp-backed generators.
@@ -155,6 +168,11 @@ CI/CD: Railway auto-deploy from git
 - Structured JSON fields: `ts`, `level`, `request_id`, `route`, `status`, `elapsed_ms`, `file_id`, `size_bytes`, `range`, `client`.
 - No print(); logging centralized and consistent.
 
+### Makefile (suggested)
+- `make check`: ruff (fix) → ruff format → mypy strict → guards → tests with branch coverage.
+- `make test`: run pytest with `--cov-branch`.
+- `make lint`: ruff + mypy, no code changes beyond ruff --fix.
+
 ### Metrics (initial)
 - Counters: uploads/downloads/deletes by status; bytes_in/out.
 - Gauges: disk_free_gb, file_count.
@@ -167,6 +185,7 @@ CI/CD: Railway auto-deploy from git
 - Healthcheck Path: `/healthz` for deploy gating; `/readyz` for storage readiness monitoring.
 - Variables: `DATA_ROOT`, `MAX_FILE_BYTES`, `MIN_FREE_GB`, service API keys, rate limit config.
 - Private-network access from turkic-api and model-trainer via `http://data-bank-api.<env>.railway.internal`.
+  - Example internal URL: `http://data-bank-api.railway.internal` in the same environment.
 
 ---
 
@@ -192,6 +211,10 @@ CI/CD: Railway auto-deploy from git
 - Enforce `MIN_FREE_GB`; return 507 early if not satisfied.
 - TTL cleanup and optional LRU reclamation when nearing space threshold.
 
+### Dynamic Storage Considerations
+- No hardcoded `MAX_FILE_BYTES` default. Enforce runtime free-space guard via `MIN_FREE_GB` or `MIN_FREE_PERCENT`.
+- Prefer `Content-Length` on upload; if absent, stream with a reserved margin and abort when projected free space falls below guard before atomic rename.
+
 ---
 
 ## Future: Object Storage Backend (Migration Path)
@@ -216,4 +239,3 @@ CI/CD: Railway auto-deploy from git
 - Quotas: per-service byte caps and/or file count; enforcement strategy.
 - Delete: idempotent 204 vs strict 404 on missing.
 - Required content types vs accepting octet-stream by default.
-
