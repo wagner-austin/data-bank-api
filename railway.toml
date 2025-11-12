@@ -1,0 +1,21 @@
+# Railway configuration for data-bank-api
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/readyz"
+healthcheckTimeout = 100
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+
+[variables]
+DATA_ROOT = "/data/files"
+MIN_FREE_GB = "2"
+DELETE_STRICT_404 = "false"
+
+# API keys must be configured per environment in Railway UI:
+# API_UPLOAD_KEYS = "turkic-api-key"
+# API_READ_KEYS = "model-trainer-key"
+# API_DELETE_KEYS = "turkic-api-key"
