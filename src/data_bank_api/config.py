@@ -10,6 +10,7 @@ class Settings:
     data_root: str = "/data/files"
     min_free_gb: int = 1
     delete_strict_404: bool = False
+    max_file_bytes: int = 0
     api_upload_keys: frozenset[str] = frozenset()
     api_read_keys: frozenset[str] = frozenset()
     api_delete_keys: frozenset[str] = frozenset()
@@ -32,6 +33,7 @@ class Settings:
         root = cls._get_env_str("DATA_ROOT", "/data/files")
         min_free = cls._get_env_str("MIN_FREE_GB", "1")
         strict = cls._get_env_str("DELETE_STRICT_404", "false").lower() in {"1", "true", "yes"}
+        max_bytes = cls._get_env_str("MAX_FILE_BYTES", "0")
 
         upload_keys: Final[frozenset[str]] = cls._csv_env_set("API_UPLOAD_KEYS")
         read_keys: Final[frozenset[str]] = cls._csv_env_set("API_READ_KEYS") or upload_keys
@@ -41,6 +43,7 @@ class Settings:
             data_root=root,
             min_free_gb=int(min_free),
             delete_strict_404=strict,
+            max_file_bytes=int(max_bytes),
             api_upload_keys=upload_keys,
             api_read_keys=read_keys,
             api_delete_keys=delete_keys,
