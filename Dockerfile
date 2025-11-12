@@ -30,21 +30,14 @@ ENV PIP_NO_CACHE_DIR=1 \
     PYTHONUNBUFFERED=1 \
     DATA_ROOT=/data/files
 
-# Create unprivileged user and data root
-RUN useradd -u 10001 -m app \ 
-    && mkdir -p /data/files \ 
-    && chown -R app:app /data
-
 WORKDIR /app
 
 COPY --from=builder /build/dist/*.whl /tmp/
 RUN pip install /tmp/*.whl && rm -rf /tmp/*.whl /root/.cache
-
-USER app
 
 EXPOSE 8000
 
 # Railway sets $PORT dynamically; fallback to 8000 for local testing
 # Note: Railway handles health checks via railway.toml healthcheckPath="/healthz"
 ENV WEB_CONCURRENCY=1
-CMD ["sh", "-c", "exec uvicorn data_bank_api.app:create_app --factory --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-1}"]
+CMD ["sh", "-c", "exec uvicorn data_bank_api.app:create_app --factory --host 0.0.0.0 --port ${PORT:-8000}"]
