@@ -24,3 +24,6 @@ Thumbs.db
 
 # Local data
 /data/
+
+# Cluade code sections
+.claude
