@@ -39,6 +39,6 @@ RUN pip install /tmp/*.whl && rm -rf /tmp/*.whl /root/.cache
 EXPOSE 8000
 
 # Railway sets $PORT dynamically; fallback to 8000 for local testing
-# Note: Railway handles health checks via railway.toml healthcheckPath="/healthz"
+# Note: Railway handles health checks via railway.toml healthcheckPath="/readyz"
 ENV WEB_CONCURRENCY=1
-CMD ["sh", "-c", "exec uvicorn data_bank_api.app:create_app --factory --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "exec hypercorn 'data_bank_api.app:create_app()' --bind [::]:${PORT:-8000}"]
