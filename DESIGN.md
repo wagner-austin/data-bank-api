@@ -33,7 +33,7 @@ Production-grade file storage API serving as the data integration layer between 
 ### Backend (Python 3.11+)
 ```yaml
 Framework: FastAPI (async/await)
-ASGI Server: Uvicorn
+ASGI Server: Hypercorn
 Deps: Poetry
 Typing: mypy (strict)
 Linting: Ruff
