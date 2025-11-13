@@ -24,7 +24,7 @@ Test:
 - curl http://localhost:8000/readyz
 
 Notes:
-- The image exposes port 8000 and runs `uvicorn data_bank_api.app:create_app --factory`.
+- The image exposes port 8000 and runs `hypercorn 'data_bank_api.app:create_app()'`.
 - Default `DATA_ROOT` is `/data/files` inside the container. Override via env if needed.
 
 ## Railway Deployment
@@ -41,7 +41,7 @@ Recommended setup (one service named `data-bank-api`):
    - `API_DELETE_KEYS=trainer-r1` (inherits from upload if omitted)
    - `DELETE_STRICT_404=false` (set `true` if you want 404 on missing delete)
 4. Start command (if not using Dockerfile CMD):
-   - `uvicorn data_bank_api.app:create_app --factory --host 0.0.0.0 --port 8000`
+   - `hypercorn 'data_bank_api.app:create_app()' --bind [::]:8000`
 5. Health checks (Railway UI):
    - Health: `/healthz`
    - Ready: `/readyz`
