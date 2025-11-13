@@ -16,7 +16,7 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.11"
 fastapi = "^0.121.0"
-uvicorn = {version = "^0.38.0", extras = ["standard"]}
+hypercorn = "^0.18.0"
 typing-extensions = "^4.12.2"
 python-multipart = "^0.0.20"
 httpx = "^0.28.1"
