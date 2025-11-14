@@ -10,7 +10,7 @@ class Settings:
     data_root: str = "/data/files"
     min_free_gb: int = 1
     delete_strict_404: bool = False
-    max_file_bytes: int = 0
+    max_file_bytes: int = 10 * 1024 * 1024 * 1024  # 10GB default limit
     api_upload_keys: frozenset[str] = frozenset()
     api_read_keys: frozenset[str] = frozenset()
     api_delete_keys: frozenset[str] = frozenset()
