@@ -11,7 +11,7 @@ help:
 
 lint:
 	# Guards first to fail fast on drift patterns
-	python .\scripts\guard.py
+	python -m scripts.guard
 	# Ensure deps are in sync and dev tools are installed
 	poetry lock
 	poetry install --with dev
@@ -21,9 +21,9 @@ lint:
 	poetry run mypy .
 
 guards:
-	python .\scripts\guard.py
+	python -m scripts.guard
 
 test:
-	if (Test-Path ".\pyproject.toml") { Write-Host "[test] pytest with coverage (branches)" -ForegroundColor Cyan; poetry run pytest --cov=data_bank_api --cov=scripts --cov-branch --cov-report=term-missing -v; } else { Write-Host "[test] Skipped: pyproject missing" -ForegroundColor Yellow; }
+	if (Test-Path ".\pyproject.toml") { Write-Host "[test] pytest with coverage (branches, xdist)" -ForegroundColor Cyan; poetry run pytest --cov=data_bank_api --cov=scripts --cov-branch --cov-report=term-missing -v -n auto; } else { Write-Host "[test] Skipped: pyproject missing" -ForegroundColor Yellow; }
 
 check: lint test
