@@ -129,7 +129,7 @@ def test_sidecar_replace_and_cleanup_unlink_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     s = _storage(tmp_path)
-    # Patch os.replace to fail only for meta temp replace
+    # Patch os.replace and os.unlink to fail for meta temp files
     real_replace = os.replace
     real_unlink = os.unlink
 
@@ -149,8 +149,28 @@ def test_sidecar_replace_and_cleanup_unlink_error(
 
     monkeypatch.setattr(os, "replace", _replace)
     monkeypatch.setattr(os, "unlink", _unlink)
-    meta = s.save_stream(io.BytesIO(b"sidecar"), "text/plain")
-    # save_stream still succeeds even if sidecar fails; ensure sha is present
+    # Metadata writes are mandatory; save_stream should fail if metadata fails
+    # Cleanup will also fail but should be silently handled
+    with pytest.raises(OSError, match="meta replace fail"):
+        s.save_stream(io.BytesIO(b"sidecar"), "text/plain")
+
+
+def test_sidecar_cleanup_unlink_error_after_successful_save(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s = _storage(tmp_path)
+    real_unlink = os.unlink
+
+    def _unlink(path: str) -> None:
+        from pathlib import Path as PathMod
+
+        if PathMod(path).name.startswith("meta_"):
+            raise OSError("meta unlink fail")
+        real_unlink(path)
+
+    monkeypatch.setattr(os, "unlink", _unlink)
+    # Upload should succeed even if cleanup fails
+    meta = s.save_stream(io.BytesIO(b"test"), "text/plain")
     assert len(meta.sha256) == 64
 
 
@@ -185,3 +205,34 @@ def test_sidecar_present_unrelated_line(tmp_path: Path) -> None:
     info = s.head(meta.file_id)
     assert info.sha256 == meta.sha256
     assert info.content_type == "application/octet-stream"
+
+
+def test_delete_removes_blob_and_sidecar(tmp_path: Path) -> None:
+    s = _storage(tmp_path)
+    meta = s.save_stream(io.BytesIO(b"abcdef"), "text/plain")
+    path = s._path_for(meta.file_id)
+    meta_path = s._meta_path_for(meta.file_id)
+    assert path.exists()
+    assert meta_path.exists()
+
+    deleted = s.delete(meta.file_id)
+
+    assert deleted is True
+    assert not path.exists()
+    assert not meta_path.exists()
+
+
+def test_delete_cleans_stale_sidecar(tmp_path: Path) -> None:
+    s = _storage(tmp_path)
+    meta = s.save_stream(io.BytesIO(b"abcdef"), "text/plain")
+    path = s._path_for(meta.file_id)
+    meta_path = s._meta_path_for(meta.file_id)
+    # Simulate blob missing but sidecar present
+    path.unlink()
+    assert not path.exists()
+    assert meta_path.exists()
+
+    deleted = s.delete(meta.file_id)
+
+    assert deleted is True
+    assert not meta_path.exists()

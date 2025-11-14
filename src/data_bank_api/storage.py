@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import shutil
 import tempfile
 from collections.abc import Iterator
-from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -46,6 +46,7 @@ class Storage:
         self._root = root
         self._min_free_bytes = int(min_free_gb) * 1024 * 1024 * 1024
         self._max_file_bytes = int(max_file_bytes) if max_file_bytes is not None else 0
+        self._logger = logging.getLogger(__name__)
 
     def _path_for(self: Storage, file_id: str) -> Path:
         fid = file_id.strip().lower()
@@ -139,9 +140,7 @@ class Storage:
                     mf.write(f"created_at={created_at}\n")
                     mf.flush()
                     os.fsync(mf.fileno())
-                with suppress(OSError):
-                    # Sidecar is best-effort; ignore failures
-                    os.replace(meta_tmp, self._meta_path_for(file_id))
+                os.replace(meta_tmp, self._meta_path_for(file_id))
             finally:
                 try:
                     if os.path.exists(meta_tmp):
@@ -213,11 +212,20 @@ class Storage:
 
     def delete(self: Storage, file_id: str) -> bool:
         path = self._path_for(file_id)
+        meta_path = self._meta_path_for(file_id)
+        existed = False
         try:
             path.unlink()
-            return True
+            existed = True
         except FileNotFoundError:
-            return False
+            # Blob already missing; proceed to sidecar cleanup below.
+            pass
+
+        if meta_path.exists():
+            meta_path.unlink()
+            existed = True
+
+        return existed
 
     def get_size(self: Storage, file_id: str) -> int:
         path = self._path_for(file_id)
